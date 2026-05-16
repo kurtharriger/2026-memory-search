@@ -49,6 +49,14 @@ uv run python build_index.py --force-rebuild
 
 Takes about 20–30 seconds for ~2,000 conversations. The MCP server picks up the new index immediately — no restart needed.
 
+After indexing, the script calls `claude -p` to generate a topic summary
+(`~/.leann/indexes/conversations.summary.md`). This requires Claude Code to be
+installed and authenticated. If it isn't, or you want to skip it:
+
+```bash
+uv run python build_index.py --force-rebuild --skip-summary
+```
+
 ### 3. Verify
 
 ```bash

@@ -169,6 +169,33 @@ the cached version automatically (a warning is printed but it still works).
 
 ---
 
+## Topic summary generation (`conversations.summary.md`)
+
+After building the index, `build_index.py` calls `claude -p` (the Claude Code CLI)
+to analyze all conversation titles and write a structured topic summary to
+`~/.leann/indexes/conversations.summary.md`. This is useful for embedding in a
+user-level skill so Claude knows what's in the index across sessions.
+
+**What gets sent:** Only conversation titles — not full text. Titles average
+~6 tokens each, so token count scales with conversation count (a few thousand
+conversations ≈ tens of thousands of tokens). Fast and cheap regardless of scale.
+
+**CLAUDE.md is included in the call.** `claude -p` injects your global
+`~/.claude/CLAUDE.md` (and any project-level CLAUDE.md) even when you pass
+`--system-prompt`. The only way to skip it is `--bare`, but `--bare` disables
+OAuth auth and requires `ANTHROPIC_API_KEY` — not practical if you authenticate
+via Claude Code's OAuth. In practice the coding guidelines in CLAUDE.md don't affect summarization
+quality; the extra overhead is a few hundred tokens regardless of dataset size.
+
+**To skip summary generation** (e.g. for a fast rebuild, or if `claude` CLI is
+not on PATH):
+
+```bash
+uv run python build_index.py --force-rebuild --skip-summary
+```
+
+---
+
 ## One document per conversation (no chunking)
 
 `build_index.py` indexes each conversation as a single document. This means:

@@ -2,14 +2,15 @@
 Build a LEANN semantic search index over ChatGPT and Claude conversation exports.
 
 Parses both export formats (which differ from what LEANN's built-in readers expect)
-and indexes each conversation as one text document.
+and indexes each conversation as one text document. After indexing, calls the
+`claude` CLI to generate a structured topic summary from conversation titles.
 
 Usage:
-    source .venv/bin/activate
-    python build_index.py [--max-convos N] [--force-rebuild]
+    uv run python build_index.py [--max-convos N] [--force-rebuild] [--skip-summary]
 
 Output:
-    indexes/conversations.leann  (+ .meta.json, .data files)
+    ~/.leann/indexes/conversations.leann  (+ .meta.json, .data files)
+    ~/.leann/indexes/conversations.summary.md  (topic summary, requires `claude` on PATH)
 
 Format notes:
   - ChatGPT export (new JSON format): downloads/chatgpt/conversations/conversations-NNN.json
@@ -22,6 +23,9 @@ Format notes:
 import argparse
 import glob
 import json
+import os
+import shutil
+import subprocess
 from pathlib import Path
 
 
@@ -162,6 +166,56 @@ def load_claude_docs(export_dir: str) -> list[tuple[str, dict]]:
 
 
 # ---------------------------------------------------------------------------
+# Topic summary generator
+# ---------------------------------------------------------------------------
+
+def generate_topic_summary(titles: list[str]) -> str | None:
+    """
+    Use the `claude` CLI to analyze conversation titles and produce a structured
+    topic summary grouped by frequency tier (Dominant / Substantial / Moderate).
+
+    Sends only titles — not full conversation text — so input is ~10-15K tokens.
+    Returns None if `claude` is not on PATH or the call fails.
+    """
+    if not shutil.which("claude"):
+        print("  `claude` CLI not found on PATH; skipping summary generation")
+        return None
+
+    title_block = "\n".join(titles)
+    prompt = f"""Analyze these {len(titles)} conversation titles and produce a structured topic summary in markdown.
+
+Group into frequency tiers based on how many conversations fall into each theme:
+- **Dominant** (~100+ conversations): the largest recurring themes
+- **Substantial** (~20–100 conversations): significant secondary themes
+- **Moderate** (~10–30 conversations): smaller but notable clusters
+
+For each tier, use a bullet list. Each bullet: topic name in bold, followed by an em dash and a brief parenthetical of key subtopics or representative terms. Aim for 3–6 bullets per tier.
+
+Conversation titles (one per line):
+{title_block}
+
+Output only the markdown tiers. No preamble, no explanation, no intro sentence."""
+
+    print(f"  Calling `claude` to analyze {len(titles)} titles...")
+    result = subprocess.run(
+        ["claude", "-p", prompt],
+        capture_output=True, text=True, timeout=120,
+    )
+    if result.returncode != 0:
+        print(f"  claude CLI error: {result.stderr.strip()}")
+        return None
+    return result.stdout.strip()
+
+
+def write_summary(summary: str, index_dir: Path, total: int) -> None:
+    """Write the topic summary to conversations.summary.md in the index directory."""
+    path = index_dir / "conversations.summary.md"
+    header = f"# Conversation Index — Topic Summary\n\n_{total} conversations indexed._\n\n"
+    path.write_text(header + summary + "\n", encoding="utf-8")
+    print(f"Summary written to: {path}")
+
+
+# ---------------------------------------------------------------------------
 # Index builder
 # ---------------------------------------------------------------------------
 
@@ -223,11 +277,20 @@ def build(args):
     register_project_directory(index_dir)
     print(f"Registered {index_dir} for leann discovery")
 
+    # Generate topic summary via `claude` CLI (skipped if claude not on PATH)
+    if not args.skip_summary:
+        print("\nGenerating topic summary...")
+        titles = [meta.get("title", "") for _, meta in all_docs if meta.get("title")]
+        summary = generate_topic_summary(titles)
+        if summary:
+            write_summary(summary, index_dir, len(all_docs))
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Build LEANN index over conversation exports")
     parser.add_argument("--index-dir", default="~/.leann/indexes", help="Directory to write the index (default: ~/.leann/indexes)")
     parser.add_argument("--max-convos", type=int, default=-1, help="Limit conversations (for testing, -1 = all)")
     parser.add_argument("--force-rebuild", action="store_true", help="Rebuild even if index exists")
+    parser.add_argument("--skip-summary", action="store_true", help="Skip topic summary generation (no Anthropic API call)")
     args = parser.parse_args()
     build(args)
