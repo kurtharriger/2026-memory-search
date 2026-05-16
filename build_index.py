@@ -41,6 +41,7 @@ import shutil
 import subprocess
 import tempfile
 import zipfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -121,6 +122,25 @@ def parse_claude_conversation(conv: dict) -> str | None:
 
 
 # ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def unix_to_iso(ts) -> str:
+    """Convert a Unix timestamp (int or float) to an ISO 8601 UTC string."""
+    if not ts:
+        return ""
+    return datetime.fromtimestamp(float(ts), tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def trim_iso(s: str) -> str:
+    """Trim sub-second precision from an ISO 8601 string, keep the Z suffix."""
+    if not s:
+        return ""
+    # "2026-05-16T17:06:36.911316Z" → "2026-05-16T17:06:36Z"
+    return re.sub(r'\.\d+Z$', 'Z', s)
+
+
+# ---------------------------------------------------------------------------
 # ZIP extraction — reads ZIP exports, writes one .md per conversation
 # ---------------------------------------------------------------------------
 
@@ -147,12 +167,29 @@ def extract_chatgpt_zip(zip_path: Path, conv_dir: Path) -> list[tuple[str, dict]
             with open(fpath, encoding="utf-8") as f:
                 conversations = json.load(f)
             for conv in conversations:
-                text = parse_chatgpt_conversation(conv)
-                if not text:
+                body = parse_chatgpt_conversation(conv)
+                if not body:
                     continue
                 conv_id = conv.get("id", "")
                 if not conv_id:
                     continue
+
+                # Build YAML frontmatter from available fields
+                fm_lines = [
+                    "---",
+                    f"id: {conv_id}",
+                    f"title: {conv.get('title', 'Untitled')}",
+                    "source: chatgpt",
+                ]
+                if created := unix_to_iso(conv.get("create_time")):
+                    fm_lines.append(f"created: {created}")
+                if updated := unix_to_iso(conv.get("update_time")):
+                    fm_lines.append(f"updated: {updated}")
+                if model := conv.get("default_model_slug"):
+                    fm_lines.append(f"model: {model}")
+                fm_lines.append("---\n")
+                text = "\n".join(fm_lines) + body
+
                 out_path = conv_dir / f"{conv_id}.md"
                 out_path.write_text(text, encoding="utf-8")
                 docs.append((text, {
@@ -186,12 +223,29 @@ def extract_claude_zip(zip_path: Path, conv_dir: Path) -> list[tuple[str, dict]]
             with open(fpath, encoding="utf-8") as f:
                 conversations = json.load(f)
             for conv in conversations:
-                text = parse_claude_conversation(conv)
-                if not text:
+                body = parse_claude_conversation(conv)
+                if not body:
                     continue
                 conv_id = conv.get("uuid", "")
                 if not conv_id:
                     continue
+
+                # Build YAML frontmatter from available fields
+                fm_lines = [
+                    "---",
+                    f"id: {conv_id}",
+                    f"title: {conv.get('name', 'Untitled')}",
+                    "source: claude",
+                ]
+                if created := trim_iso(conv.get("created_at", "")):
+                    fm_lines.append(f"created: {created}")
+                if updated := trim_iso(conv.get("updated_at", "")):
+                    fm_lines.append(f"updated: {updated}")
+                if summary := (conv.get("summary") or "").strip():
+                    fm_lines.append(f"summary: {summary}")
+                fm_lines.append("---\n")
+                text = "\n".join(fm_lines) + body
+
                 out_path = conv_dir / f"{conv_id}.md"
                 out_path.write_text(text, encoding="utf-8")
                 docs.append((text, {

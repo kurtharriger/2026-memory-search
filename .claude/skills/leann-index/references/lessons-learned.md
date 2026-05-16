@@ -65,6 +65,19 @@ extracts only files named `conversations.json` to a temp dir, and processes them
 
 ---
 
+## Project field not available in exports
+
+Neither ChatGPT nor Claude includes project membership in their conversation
+exports (as of 2026). ChatGPT has a `conversation_template_id` field but it is
+`None` for regular and project conversations alike. Claude's export has no
+project field at all.
+
+If either service adds project info to their export format in future, it can
+be added to the YAML frontmatter written by `extract_chatgpt_zip` /
+`extract_claude_zip` in `build_index.py`.
+
+---
+
 ## Per-conversation file storage
 
 `build_index.py` writes each conversation as an individual `.md` file:
@@ -112,6 +125,35 @@ linker errors, set:
 export LDFLAGS="-L/opt/homebrew/opt/libomp/lib"
 export CPPFLAGS="-I/opt/homebrew/opt/libomp/include"
 ```
+
+---
+
+## Smoke-testing: always deregister temp indexes afterward
+
+`LeannBuilder.build_index()` followed by `register_project_directory()` writes
+the index directory path into `~/.leann/projects.json`. If you use a temp
+directory for smoke tests (e.g. `--index-dir /tmp/leann-test`), that path gets
+registered and `leann search conversations` will prompt "Found N indexes named
+'conversations' — which one?" on every subsequent search.
+
+**After any smoke test, deregister the temp directory:**
+
+```python
+import json
+from pathlib import Path
+p = Path("~/.leann/projects.json").expanduser()
+keep = [r for r in json.loads(p.read_text())
+        if not r.startswith("/tmp") and not r.startswith("/private/tmp")]
+p.write_text(json.dumps(keep, indent=2))
+```
+
+Or edit `~/.leann/projects.json` directly — it's a plain JSON array of paths.
+
+**Better practice:** use a named temp dir under `/tmp` and clean it up
+explicitly, or avoid registering at all by not calling `register_project_directory`
+in test runs. `build_index.py --max-convos 5` still registers; if you're just
+testing parsing/extraction, call the extract functions directly without going
+through `build()`.
 
 ---
 
