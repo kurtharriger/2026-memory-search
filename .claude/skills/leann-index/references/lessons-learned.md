@@ -15,10 +15,11 @@ upstream code, we wrote a thin custom script that uses LEANN's core API
 ### ChatGPT reader: HTML only, exports are JSON ZIPs
 
 LEANN's `ChatGPTReader` parses `chat.html` from the old export format.
-The current ChatGPT export (as of 2025) is a ZIP file containing JSON files:
+The current ChatGPT export (as of 2025) is a ZIP file containing JSON files.
+The downloaded filename does not include a "chatgpt-" prefix — it's a bare hash:
 
 ```
-chatgpt-<hash>-<date>.zip
+<hash>-<date>-<id>.zip
   └── conversations/
         conversations-000.json   # list of ~100 conversations each
         conversations-001.json
@@ -47,10 +48,12 @@ the actual Claude export uses `chat_messages`. It also looks for `role` and
 `content` on each message, but the actual fields are `sender` (`"human"` or
 `"assistant"`) and `text`. The reader silently produces zero documents.
 
-The Claude export is a ZIP containing a nested batch folder:
+The Claude export is a ZIP containing a nested batch folder. The downloaded
+filename is prefixed with `data-`, not `claude-`:
+
 ```
-claude-<hash>-<date>.zip
-  └── data-<uuid>-batch-0000/
+data-<uuid>-<timestamp>-<hash>-batch-NNNN.zip
+  └── data-<uuid>-batch-NNNN/
         conversations.json   # list of conversations
         memories.json
         projects/
@@ -232,10 +235,11 @@ of N messages with `create_text_chunks()` from LEANN's `apps/chunking` module.
 
 ## ChatGPT and Claude ZIP placement
 
-Drop export ZIPs directly into the source directories — no extraction needed:
+Drop export ZIPs directly into the source directories — no extraction needed.
+The filenames are whatever the service downloads them as (no renaming required):
 ```
-downloads/chatgpt/chatgpt-<hash>-<date>.zip
-downloads/claude/claude-<hash>-<date>.zip
+downloads/chatgpt/<hash>-<date>-<id>.zip        # ChatGPT: bare hash, no prefix
+downloads/claude/data-<uuid>-<timestamp>-<hash>-batch-NNNN.zip   # Claude: data- prefix
 ```
 
 `build_index.py` scans each directory for `*.zip`, extracts only the

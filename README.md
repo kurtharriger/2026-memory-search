@@ -32,14 +32,14 @@ Re-export your data and rebuild whenever you want fresh results (suggested: mont
 
 ### 1. Export your data
 
-**ChatGPT:** Settings → Data Controls → Export → download the ZIP → drop it into `downloads/chatgpt/` (no extraction needed):
+**ChatGPT:** Settings → Data Controls → Export → download the ZIP → drop it into `downloads/chatgpt/` (no extraction needed). The filename is a bare hash — no prefix:
 ```
-downloads/chatgpt/chatgpt-<hash>-<date>.zip
+downloads/chatgpt/<hash>-<date>-<id>.zip
 ```
 
-**Claude.ai:** Settings → Privacy → Export Data → download the ZIP → drop it into `downloads/claude/`:
+**Claude.ai:** Settings → Privacy → Export Data → download the ZIP → drop it into `downloads/claude/`. The filename is prefixed with `data-`:
 ```
-downloads/claude/claude-<hash>-<date>.zip
+downloads/claude/data-<uuid>-<timestamp>-<hash>-batch-NNNN.zip
 ```
 
 ### 2. Rebuild
