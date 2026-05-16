@@ -23,8 +23,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_DIR="$SCRIPT_DIR/.venv"
 SKILL_DIR="$HOME/.claude/skills/personal-search"
-SUMMARY_FILE="$HOME/.leann/indexes/conversations.summary.md"
-INDEX_FILE="$HOME/.leann/indexes/conversations.leann.meta.json"
+SUMMARY_FILE="$HOME/.leann/indexes/summary.md"
+INDEX_FILE="$HOME/.leann/indexes/chatgpt/chatgpt.leann.meta.json"
 
 SKIP_SUMMARY=false
 for arg in "$@"; do
@@ -98,58 +98,62 @@ cat > "$SKILL_DIR/SKILL.md" << SKILL_EOF
 ---
 name: personal-search
 description: >
-  Search the user's personal AI conversation history (ChatGPT + Claude.ai exports)
-  using the leann_search MCP tool. Use this skill whenever the user asks what they've
-  discussed before, wants to find a past conversation, or asks about their history
-  with any topic — even if they don't say "search" explicitly. Trigger on phrases
-  like "have I talked about", "what did I discuss", "find in my history", "do I have
-  any convos about", "what have I asked about before". Always use index_name
-  "conversations".
+  Search the user's personal AI conversation history using the leann_search MCP
+  tool. Use this skill whenever the user asks what they've discussed before, wants
+  to find a past conversation, or asks about their history with any topic — even if
+  they don't say "search" explicitly. Trigger on phrases like "have I talked about",
+  "what did I discuss", "find in my history", "search my chatgpt history", "search
+  my claude code sessions". Each source has its own index — pick the right one or
+  search all three.
 ---
 
 # Personal Conversation Search
 
-The user has a LEANN semantic search index over their personal AI conversation
-history. Sources indexed:
-- **ChatGPT** and **Claude.ai** exports (full conversations)
-- **Claude Code** sessions from \`~/.claude/projects/\` (user prompts + assistant
-  prose; tool calls filtered out)
+The user has LEANN semantic search indexes over their personal AI conversation
+history, split by source. Each source has its own index name:
 
-Use \`leann_search\` to find relevant conversations. The \`source\` field in each
-result identifies which source it came from (\`chatgpt\`, \`claude\`, \`claude-code\`).
+| Index name    | Contents                                    |
+|---------------|---------------------------------------------|
+| \`chatgpt\`     | ChatGPT conversation exports                |
+| \`claude\`      | Claude.ai conversation exports              |
+| \`claude-code\` | Claude Code coding sessions (prompts + prose, tool calls filtered) |
 
 ## How to search
 
 Call \`leann_search\` with:
-- \`index_name\`: \`"conversations"\` (always this value)
+- \`index_name\`: one of \`"chatgpt"\`, \`"claude"\`, or \`"claude-code"\`
 - \`query\`: a natural-language description of what to find
 
-Results include the conversation title, a text excerpt, and a \`source\` field
-in the metadata — the absolute path to an individual conversation file on disk.
+If the user doesn't specify a source, search all three in parallel and combine
+results. Results include the conversation title, a text excerpt, and a \`source\`
+field in the metadata — the absolute path to the individual conversation file.
 Read that file when the user needs the full conversation text.
 
-## What's in the index
+## What's in the indexes
 
-**BEGIN index summary** (auto-populated after first \`uv run python build_index.py\`):
+**BEGIN index summary** (auto-populated after \`uv run python build_index.py\`):
 
 @${SUMMARY_FILE}
 
 **END index summary**
 
-If the block above is empty, the index has not been built yet:
-- If the user **explicitly** asked to search their conversation history, let them
-  know the index doesn't exist yet and show them the "Updating the index" steps below.
-- Otherwise (e.g. context-loading or incidental reference), treat it as no content
-  found and continue normally.
+If the block above is empty, no indexes have been built yet:
+- If the user **explicitly** asked to search, let them know and show the update steps.
+- Otherwise treat it as no content found and continue normally.
 
-## Updating the index
+## Updating the indexes
 
-When the user wants to build or refresh the index with new exports:
-1. Re-export from ChatGPT and/or Claude.ai (see README for export instructions)
-2. Extract into \`downloads/chatgpt/\` and \`downloads/claude/\` in the project
-3. Run: \`uv run python build_index.py --force-rebuild\`
+Rebuild all sources:
+\`\`\`bash
+uv run python build_index.py --force-rebuild
+\`\`\`
 
-The topic summary above is regenerated automatically — no skill edit needed.
+Rebuild only one source (e.g. after downloading a new ChatGPT export):
+\`\`\`bash
+uv run python build_index.py --sources chatgpt --force-rebuild
+\`\`\`
+
+The combined topic summary above is regenerated automatically — no skill edit needed.
 SKILL_EOF
 
 echo "  Written: $SKILL_DIR/SKILL.md"
@@ -157,8 +161,8 @@ echo "  Written: $SKILL_DIR/SKILL.md"
 # ── 6. Build index (auto-skips if no export data is present) ──────────────────
 echo ""
 echo "→ Checking for export data..."
-HAS_CHATGPT=$(ls "$SCRIPT_DIR/downloads/chatgpt/conversations/conversations-"*.json 2>/dev/null | head -1 || true)
-HAS_CLAUDE=$(find "$SCRIPT_DIR/downloads/claude" -name "conversations.json" 2>/dev/null | head -1 || true)
+HAS_CHATGPT=$(ls "$SCRIPT_DIR/downloads/chatgpt/"*.zip 2>/dev/null | head -1 || true)
+HAS_CLAUDE=$(ls "$SCRIPT_DIR/downloads/claude/"*.zip 2>/dev/null | head -1 || true)
 
 INDEX_BUILT=false
 if [ -z "$HAS_CHATGPT" ] && [ -z "$HAS_CLAUDE" ]; then
