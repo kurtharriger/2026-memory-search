@@ -111,21 +111,27 @@ and don't rely on `leann list` to confirm the index is present — use search in
 
 ## How LEANN discovers indexes (leann list / leann search)
 
-`leann list` reads `~/.leann/projects.json` — a JSON array of project
-directory paths. A project directory is registered if it contains
-`*.leann.meta.json` files anywhere in its tree.
+`leann search` resolves index names against directories registered in
+`~/.leann/projects.json` — a JSON array of project directory paths.
 
-`LeannBuilder.build_index(path)` writes:
-- `path` — the raw index binary
-- `path.meta.json` — metadata LEANN uses for discovery
-- `path.data` (and others)
+`LeannBuilder.build_index(path)` writes the index files but does **not**
+automatically register the directory. Registration must be done explicitly:
 
-`leann search <index_name> <query>` resolves `index_name` against registered
-projects. In practice, `index_name` is the directory containing the `.leann`
-file — so our index name is `indexes` (the `indexes/` folder).
+```python
+from leann.registry import register_project_directory
+register_project_directory(Path("~/.leann/indexes").expanduser())
+```
 
-The `register_project_directory()` call in `build_index.py` ensures the
-project is in `~/.leann/projects.json` after building.
+`build_index.py` calls this after every build. If you bypass the script and
+call `LeannBuilder` directly, you must register manually or `leann search`
+will silently fail to find the index.
+
+A directory qualifies for registration only if it already contains
+`*.leann.meta.json` files — so the call must come *after* `build_index()`.
+
+`leann search <index_name> <query>` resolves `index_name` as the filename
+stem of the `.leann` file (e.g. `conversations` for `conversations.leann`),
+searching across all registered directories.
 
 ---
 

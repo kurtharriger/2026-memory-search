@@ -10,7 +10,7 @@ Semantic search over personal AI conversation history using [LEANN](https://gith
 
 ### From Claude Code (recommended)
 
-The `leann-server` MCP is already registered for this project. Just ask naturally in any Claude Code session opened in this directory:
+Once the MCP server is registered (see [Setup from scratch](#setup-from-scratch)), ask naturally in any Claude Code session:
 
 > "Search my conversation history for anything about Kubernetes networking"
 > "What have I discussed about salary negotiation?"
@@ -87,7 +87,8 @@ uv venv --python 3.13
 uv pip install leann
 
 # 3. Register the MCP server with Claude Code
-# (stored in ~/.claude.json, not in the project directory)
+# Stored in ~/.claude.json (machine-local, not in the repo).
+# Required for leann_search to be available in Claude Code sessions.
 claude mcp add leann-server -- "$(pwd)/.venv/bin/leann_mcp"
 
 # 4. Build the index (writes to ~/.leann/indexes/ and registers it automatically)
