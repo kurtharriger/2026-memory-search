@@ -1,16 +1,18 @@
 """
-Build a LEANN semantic search index over ChatGPT and Claude conversation exports.
+Build a LEANN semantic search index over ChatGPT, Claude, and Claude Code conversations.
 
-Reads ZIP exports directly — no manual extraction needed:
-  downloads/chatgpt/<any>.zip   (ChatGPT export ZIP)
-  downloads/claude/<any>.zip    (Claude export ZIP)
+Sources:
+  downloads/chatgpt/<any>.zip   ChatGPT export ZIP (no extraction needed)
+  downloads/claude/<any>.zip    Claude.ai export ZIP (no extraction needed)
+  ~/.claude/projects/           Claude Code session transcripts (JSONL, read directly)
 
-Each conversation is written as an individual .md file:
+Each conversation is written as an individual .md file with YAML frontmatter:
   ~/.leann/indexes/chatgpt/<id>.md
   ~/.leann/indexes/claude/<id>.md
+  ~/.leann/indexes/claude-code/<session-id>.md
 
-This lets Claude read the full text of any found conversation by opening the
-source file path returned in search metadata — no web authentication needed.
+The `source` field in search result metadata is the path to this file, so
+callers can Read it for full context without web authentication.
 
 Usage:
     uv run python build_index.py [--max-convos N] [--force-rebuild] [--skip-summary]
@@ -20,17 +22,17 @@ Usage:
     --skip-summary   Skip topic summary generation (no `claude` CLI call).
 
 Output:
-    ~/.leann/indexes/conversations.leann      (vector index)
-    ~/.leann/indexes/chatgpt/<id>.md          (one file per ChatGPT conversation)
-    ~/.leann/indexes/claude/<id>.md           (one file per Claude conversation)
-    ~/.leann/indexes/conversations.summary.md (topic summary, requires `claude` CLI)
+    ~/.leann/indexes/conversations.leann        (vector index)
+    ~/.leann/indexes/chatgpt/<id>.md
+    ~/.leann/indexes/claude/<id>.md
+    ~/.leann/indexes/claude-code/<session-id>.md
+    ~/.leann/indexes/conversations.summary.md   (topic summary, requires `claude` CLI)
 
 Export format notes:
-  ChatGPT ZIP: contains conversations/conversations-NNN.json files.
-    Each conversation has a `mapping` tree; we walk backward from `current_node`
-    to reconstruct the active thread in chronological order.
-  Claude ZIP: contains <batch>/conversations.json with a `chat_messages` list
-    using `sender` and `text` fields (not `role`/`content` like LEANN expects).
+  ChatGPT ZIP: conversations/conversations-NNN.json, mapping tree, walk current_node.
+  Claude ZIP: <batch>/conversations.json, chat_messages list with sender/text fields.
+  Claude Code JSONL: messages with type user/assistant/ai-title; text blocks indexed,
+    tool_use/tool_result/thinking blocks skipped.
 """
 
 import argparse
@@ -140,6 +142,15 @@ def trim_iso(s: str) -> str:
     return re.sub(r'\.\d+Z$', 'Z', s)
 
 
+def yaml_str(s: str) -> str:
+    """
+    Quote a string value for YAML frontmatter using JSON encoding.
+    Handles colons (URLs), special chars, and multi-line content safely.
+    json.dumps produces double-quoted strings that are valid YAML.
+    """
+    return json.dumps(str(s))
+
+
 # ---------------------------------------------------------------------------
 # ZIP extraction — reads ZIP exports, writes one .md per conversation
 # ---------------------------------------------------------------------------
@@ -178,7 +189,7 @@ def extract_chatgpt_zip(zip_path: Path, conv_dir: Path) -> list[tuple[str, dict]
                 fm_lines = [
                     "---",
                     f"id: {conv_id}",
-                    f"title: {conv.get('title', 'Untitled')}",
+                    f"title: {yaml_str(conv.get('title', 'Untitled'))}",
                     "source: chatgpt",
                 ]
                 if created := unix_to_iso(conv.get("create_time")):
@@ -234,7 +245,7 @@ def extract_claude_zip(zip_path: Path, conv_dir: Path) -> list[tuple[str, dict]]
                 fm_lines = [
                     "---",
                     f"id: {conv_id}",
-                    f"title: {conv.get('name', 'Untitled')}",
+                    f"title: {yaml_str(conv.get('name', 'Untitled'))}",
                     "source: claude",
                 ]
                 if created := trim_iso(conv.get("created_at", "")):
@@ -242,7 +253,7 @@ def extract_claude_zip(zip_path: Path, conv_dir: Path) -> list[tuple[str, dict]]
                 if updated := trim_iso(conv.get("updated_at", "")):
                     fm_lines.append(f"updated: {updated}")
                 if summary := (conv.get("summary") or "").strip():
-                    fm_lines.append(f"summary: {summary}")
+                    fm_lines.append(f"summary: {yaml_str(summary)}")
                 fm_lines.append("---\n")
                 text = "\n".join(fm_lines) + body
 
@@ -288,6 +299,151 @@ def load_claude_docs(export_dir: str, conv_dir: Path) -> list[tuple[str, dict]]:
     for zip_path in zips:
         print(f"  Extracting {zip_path.name}...")
         docs.extend(extract_claude_zip(zip_path, conv_dir))
+    return docs
+
+
+# ---------------------------------------------------------------------------
+# Claude Code session transcripts
+# ---------------------------------------------------------------------------
+
+def parse_claude_code_session(msgs: list[dict]) -> tuple[str, dict] | None:
+    """
+    Parse a Claude Code session JSONL (list of decoded message dicts) into
+    (body_text, metadata).
+
+    Indexed content:
+      - User prompts: type=="user" where content is a string, or the `text`
+        items within a content list (tool_result items are skipped).
+      - Assistant prose: type=="assistant" content list `text` items only;
+        tool_use and thinking blocks are skipped.
+
+    Metadata extracted:
+      - title: from the ai-title message (falls back to first user prompt)
+      - session_id, cwd, created: from the first user/assistant message
+
+    Returns None if the session has no indexable user/assistant text.
+    """
+    title = None
+    session_id = None
+    cwd = None
+    created = None
+    exchanges = []
+
+    for msg in msgs:
+        mtype = msg.get("type")
+
+        if mtype == "ai-title":
+            title = msg.get("aiTitle") or title
+            session_id = session_id or msg.get("sessionId")
+            continue
+
+        # Grab session-level metadata from the first substantive message
+        if mtype in ("user", "assistant") and not session_id:
+            session_id = msg.get("sessionId")
+            cwd = msg.get("cwd")
+            created = msg.get("timestamp")
+
+        # Content lives at msg["message"]["content"] for user/assistant,
+        # or msg["content"] for queue-operation (which we don't index).
+        content = (msg.get("message") or {}).get("content") or msg.get("content")
+
+        if mtype == "user":
+            if isinstance(content, str) and content.strip():
+                exchanges.append(("User", content.strip()))
+            elif isinstance(content, list):
+                # List may mix tool_result and text; keep only text items.
+                for item in content:
+                    if item.get("type") == "text" and (item.get("text") or "").strip():
+                        exchanges.append(("User", item["text"].strip()))
+
+        elif mtype == "assistant":
+            if isinstance(content, list):
+                parts = [
+                    item["text"].strip()
+                    for item in content
+                    if item.get("type") == "text" and (item.get("text") or "").strip()
+                ]
+                if parts:
+                    exchanges.append(("Claude Code", " ".join(parts)))
+
+    if not exchanges:
+        return None
+
+    # Fall back to first user prompt as title if ai-title wasn't emitted.
+    # Skip content that looks like system injections (starts with < tag).
+    if not title:
+        first_user = next(
+            (text for role, text in exchanges
+             if role == "User" and not text.startswith("<")),
+            None,
+        )
+        title = (first_user or "")[:80] or "Untitled session"
+
+    lines = [f"Conversation: {title}", ""]
+    for role, text in exchanges:
+        lines.append(f"[{role}]: {text}")
+        lines.append("")
+
+    return "\n".join(lines), {
+        "title": title,
+        "session_id": session_id,
+        "cwd": cwd,
+        "created": created,
+    }
+
+
+def load_claude_code_docs(projects_dir: str, conv_dir: Path) -> list[tuple[str, dict]]:
+    """
+    Load Claude Code session transcripts from ~/.claude/projects/.
+
+    Walks all *.jsonl files under projects_dir, parses each into a document,
+    writes one .md file per session to conv_dir, and returns (text, metadata)
+    tuples ready for indexing.
+    """
+    projects_path = Path(projects_dir).expanduser()
+    if not projects_path.exists():
+        print(f"  {projects_dir} not found — skipping Claude Code sessions")
+        return []
+
+    jsonl_files = sorted(projects_path.glob("**/*.jsonl"))
+    print(f"  Found {len(jsonl_files)} session files")
+
+    docs = []
+    for jsonl_path in jsonl_files:
+        session_id = jsonl_path.stem
+        try:
+            msgs = [json.loads(line) for line in jsonl_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+        except Exception:
+            continue
+
+        result = parse_claude_code_session(msgs)
+        if not result:
+            continue
+        body, meta = result
+
+        fm_lines = [
+            "---",
+            f"id: {session_id}",
+            f"title: {yaml_str(meta['title'])}",
+            "source: claude-code",
+        ]
+        if cwd := meta.get("cwd"):
+            fm_lines.append(f"project: {cwd}")
+        if created := trim_iso(meta.get("created") or ""):
+            fm_lines.append(f"created: {created}")
+        fm_lines.append("---\n")
+        text = "\n".join(fm_lines) + body
+
+        out_path = conv_dir / f"{session_id}.md"
+        out_path.write_text(text, encoding="utf-8")
+        docs.append((text, {
+            "source": str(out_path),
+            "title": meta["title"],
+            "id": session_id,
+            "project": meta.get("cwd", ""),
+            "created": meta.get("created", ""),
+        }))
+
     return docs
 
 
@@ -357,7 +513,7 @@ def build(args):
         return
 
     # Clear per-conversation files on rebuild so stale conversations don't linger
-    for subdir in ["chatgpt", "claude"]:
+    for subdir in ["chatgpt", "claude", "claude-code"]:
         d = index_dir / subdir
         if d.exists() and args.force_rebuild:
             shutil.rmtree(d)
@@ -373,7 +529,11 @@ def build(args):
     claude_docs = load_claude_docs("downloads/claude", index_dir / "claude")
     print(f"  {len(claude_docs)} Claude conversations loaded")
 
-    all_docs = chatgpt_docs + claude_docs
+    print("Loading Claude Code sessions...")
+    claude_code_docs = load_claude_code_docs("~/.claude/projects", index_dir / "claude-code")
+    print(f"  {len(claude_code_docs)} Claude Code sessions loaded")
+
+    all_docs = chatgpt_docs + claude_docs + claude_code_docs
     if args.max_convos > 0:
         all_docs = all_docs[: args.max_convos]
         print(f"Limiting to {args.max_convos} conversations (--max-convos)")

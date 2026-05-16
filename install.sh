@@ -110,8 +110,13 @@ description: >
 # Personal Conversation Search
 
 The user has a LEANN semantic search index over their personal AI conversation
-history (ChatGPT + Claude.ai exports). Use \`leann_search\` to find relevant
-conversations.
+history. Sources indexed:
+- **ChatGPT** and **Claude.ai** exports (full conversations)
+- **Claude Code** sessions from \`~/.claude/projects/\` (user prompts + assistant
+  prose; tool calls filtered out)
+
+Use \`leann_search\` to find relevant conversations. The \`source\` field in each
+result identifies which source it came from (\`chatgpt\`, \`claude\`, \`claude-code\`).
 
 ## How to search
 
