@@ -69,6 +69,7 @@ uv run leann search conversations "test query" --top-k 2 --non-interactive
 
 ```
 .
+├── install.sh              # One-command setup (venv, MCP, user skill, index)
 ├── build_index.py          # Indexes ChatGPT + Claude exports into LEANN
 ├── downloads/
 │   ├── chatgpt/            # ChatGPT export (conversations/ subfolder)
@@ -77,14 +78,35 @@ uv run leann search conversations "test query" --top-k 2 --non-interactive
     └── skills/
         └── leann-index/    # Project skill for AI agents (see below)
 
-~/.leann/indexes/           # Index lives here (outside the repo — no gitignore needed)
+~/.leann/indexes/           # Index and topic summary live here (outside the repo)
+~/.claude/skills/
+    └── personal-search/    # User-level skill (created by install.sh)
+                            # References the topic summary via @-import — stays
+                            # current automatically when the index is rebuilt
 ```
 
 ---
 
 ## Setup from scratch
 
-If you need to rebuild the environment on a new machine:
+Run the install script — it handles everything idempotently:
+
+```bash
+bash install.sh
+```
+
+This installs Homebrew dependencies, creates the Python 3.13 venv, installs
+LEANN, registers the MCP server with Claude Code, and writes a user-level skill
+(`~/.claude/skills/personal-search/`) so `leann_search` is available in all
+Claude Code sessions. If export data is already in `downloads/`, it also builds
+the index.
+
+If no export data is found in `downloads/`, the index build is skipped
+automatically and the script prints next steps. Safe to run before exporting.
+
+### Manual setup (step by step)
+
+If you prefer to do it by hand:
 
 ```bash
 # 1. Install system dependencies
