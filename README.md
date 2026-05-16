@@ -32,14 +32,15 @@ Re-export your data and rebuild whenever you want fresh results (suggested: mont
 
 ### 1. Export your data
 
-**ChatGPT:** Settings → Data Controls → Export → download the ZIP → extract so the layout is:
+**ChatGPT:** Settings → Data Controls → Export → download the ZIP → drop it into `downloads/chatgpt/` (no extraction needed):
 ```
-downloads/chatgpt/conversations/conversations-000.json
-downloads/chatgpt/conversations/conversations-001.json
-...
+downloads/chatgpt/chatgpt-<hash>-<date>.zip
 ```
 
-**Claude.ai:** Settings → Privacy → Export Data → download the ZIP → extract into `downloads/claude/` (the nested batch folder is fine as-is).
+**Claude.ai:** Settings → Privacy → Export Data → download the ZIP → drop it into `downloads/claude/`:
+```
+downloads/claude/claude-<hash>-<date>.zip
+```
 
 ### 2. Rebuild
 
@@ -70,19 +71,22 @@ uv run leann search conversations "test query" --top-k 2 --non-interactive
 ```
 .
 ├── install.sh              # One-command setup (venv, MCP, user skill, index)
-├── build_index.py          # Indexes ChatGPT + Claude exports into LEANN
+├── build_index.py          # Extracts ZIPs, writes per-conversation files, builds index
 ├── downloads/
-│   ├── chatgpt/            # ChatGPT export (conversations/ subfolder)
-│   └── claude/             # Claude.ai export (batch subfolder with conversations.json)
+│   ├── chatgpt/            # Drop ChatGPT export ZIP here (no extraction needed)
+│   └── claude/             # Drop Claude.ai export ZIP here
 └── .claude/
     └── skills/
         └── leann-index/    # Project skill for AI agents (see below)
 
-~/.leann/indexes/           # Index and topic summary live here (outside the repo)
+~/.leann/indexes/           # All index output lives here (outside the repo)
+    conversations.leann     # Vector index
+    conversations.summary.md
+    chatgpt/<id>.md         # One file per ChatGPT conversation
+    claude/<id>.md          # One file per Claude conversation
 ~/.claude/skills/
     └── personal-search/    # User-level skill (created by install.sh)
-                            # References the topic summary via @-import — stays
-                            # current automatically when the index is rebuilt
+                            # @-imports the topic summary — stays current on rebuild
 ```
 
 ---

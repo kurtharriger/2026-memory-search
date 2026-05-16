@@ -119,7 +119,9 @@ Call \`leann_search\` with:
 - \`index_name\`: \`"conversations"\` (always this value)
 - \`query\`: a natural-language description of what to find
 
-Results include the conversation title and a text excerpt.
+Results include the conversation title, a text excerpt, and a \`source\` field
+in the metadata — the absolute path to an individual conversation file on disk.
+Read that file when the user needs the full conversation text.
 
 ## What's in the index
 

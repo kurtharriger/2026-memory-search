@@ -1,31 +1,46 @@
 """
 Build a LEANN semantic search index over ChatGPT and Claude conversation exports.
 
-Parses both export formats (which differ from what LEANN's built-in readers expect)
-and indexes each conversation as one text document. After indexing, calls the
-`claude` CLI to generate a structured topic summary from conversation titles.
+Reads ZIP exports directly — no manual extraction needed:
+  downloads/chatgpt/<any>.zip   (ChatGPT export ZIP)
+  downloads/claude/<any>.zip    (Claude export ZIP)
+
+Each conversation is written as an individual .md file:
+  ~/.leann/indexes/chatgpt/<id>.md
+  ~/.leann/indexes/claude/<id>.md
+
+This lets Claude read the full text of any found conversation by opening the
+source file path returned in search metadata — no web authentication needed.
 
 Usage:
     uv run python build_index.py [--max-convos N] [--force-rebuild] [--skip-summary]
 
-Output:
-    ~/.leann/indexes/conversations.leann  (+ .meta.json, .data files)
-    ~/.leann/indexes/conversations.summary.md  (topic summary, requires `claude` on PATH)
+    --force-rebuild  Clears existing per-conversation files and rebuilds from scratch.
+    --max-convos N   Limit total conversations (useful for testing).
+    --skip-summary   Skip topic summary generation (no `claude` CLI call).
 
-Format notes:
-  - ChatGPT export (new JSON format): downloads/chatgpt/conversations/conversations-NNN.json
-      Each conversation has a `mapping` tree; we walk backward from `current_node`
-      to reconstruct the active thread in chronological order.
-  - Claude export: downloads/claude/<batch>/conversations.json
-      Each conversation has `chat_messages` list with `text` and `sender` fields.
+Output:
+    ~/.leann/indexes/conversations.leann      (vector index)
+    ~/.leann/indexes/chatgpt/<id>.md          (one file per ChatGPT conversation)
+    ~/.leann/indexes/claude/<id>.md           (one file per Claude conversation)
+    ~/.leann/indexes/conversations.summary.md (topic summary, requires `claude` CLI)
+
+Export format notes:
+  ChatGPT ZIP: contains conversations/conversations-NNN.json files.
+    Each conversation has a `mapping` tree; we walk backward from `current_node`
+    to reconstruct the active thread in chronological order.
+  Claude ZIP: contains <batch>/conversations.json with a `chat_messages` list
+    using `sender` and `text` fields (not `role`/`content` like LEANN expects).
 """
 
 import argparse
-import glob
 import json
 import os
+import re
 import shutil
 import subprocess
+import tempfile
+import zipfile
 from pathlib import Path
 
 
@@ -105,63 +120,120 @@ def parse_claude_conversation(conv: dict) -> str | None:
     return "\n".join(lines)
 
 
-def load_chatgpt_docs(export_dir: str) -> list[tuple[str, dict]]:
+# ---------------------------------------------------------------------------
+# ZIP extraction — reads ZIP exports, writes one .md per conversation
+# ---------------------------------------------------------------------------
+
+def extract_chatgpt_zip(zip_path: Path, conv_dir: Path) -> list[tuple[str, dict]]:
     """
-    Load all ChatGPT conversations from conversations-NNN.json files.
-    Returns list of (text, metadata) tuples.
+    Extract ChatGPT conversations from a ZIP export.
+
+    Finds conversations-NNN.json files inside the ZIP (regardless of nesting),
+    parses each conversation, and writes one .md file to conv_dir. Returns
+    (text, metadata) tuples ready for indexing. The metadata `source` field is
+    the absolute path of the written file so callers can read it for full context.
     """
     docs = []
-    pattern = str(Path(export_dir) / "conversations" / "conversations-*.json")
-    files = sorted(glob.glob(pattern))
-    if not files:
-        print(f"  No ChatGPT JSON files found at {pattern}")
-        return docs
+    with tempfile.TemporaryDirectory() as tmpdir:
+        with zipfile.ZipFile(zip_path) as zf:
+            names = [n for n in zf.namelist()
+                     if re.search(r'conversations.*\.json$', n)]
+            if not names:
+                print(f"  No conversations*.json found in {zip_path.name}")
+                return docs
+            zf.extractall(tmpdir, members=names)
 
-    for fpath in files:
-        with open(fpath, encoding="utf-8") as f:
-            conversations = json.load(f)
-        for conv in conversations:
-            text = parse_chatgpt_conversation(conv)
-            if text:
-                metadata = {
-                    "source": "chatgpt",
+        for fpath in sorted(Path(tmpdir).glob("**/conversations*.json")):
+            with open(fpath, encoding="utf-8") as f:
+                conversations = json.load(f)
+            for conv in conversations:
+                text = parse_chatgpt_conversation(conv)
+                if not text:
+                    continue
+                conv_id = conv.get("id", "")
+                if not conv_id:
+                    continue
+                out_path = conv_dir / f"{conv_id}.md"
+                out_path.write_text(text, encoding="utf-8")
+                docs.append((text, {
+                    "source": str(out_path),
                     "title": conv.get("title", "Untitled"),
-                    "id": conv.get("id", ""),
+                    "id": conv_id,
                     "created": conv.get("create_time", 0),
-                }
-                docs.append((text, metadata))
-
+                }))
     return docs
 
 
-def load_claude_docs(export_dir: str) -> list[tuple[str, dict]]:
+def extract_claude_zip(zip_path: Path, conv_dir: Path) -> list[tuple[str, dict]]:
     """
-    Load Claude conversations from the nested export directory structure.
-    The export unpacks to: downloads/claude/<batch-id>/conversations.json
-    Returns list of (text, metadata) tuples.
+    Extract Claude conversations from a ZIP export.
+
+    Finds conversations.json inside the ZIP (regardless of batch-folder nesting),
+    parses each conversation, and writes one .md file to conv_dir. Returns
+    (text, metadata) tuples with `source` set to the written file path.
     """
     docs = []
-    # Find conversations.json anywhere under export_dir
-    pattern = str(Path(export_dir) / "**" / "conversations.json")
-    files = glob.glob(pattern, recursive=True)
-    if not files:
-        print(f"  No Claude conversations.json found under {export_dir}")
-        return docs
+    with tempfile.TemporaryDirectory() as tmpdir:
+        with zipfile.ZipFile(zip_path) as zf:
+            names = [n for n in zf.namelist()
+                     if n.endswith("conversations.json")]
+            if not names:
+                print(f"  No conversations.json found in {zip_path.name}")
+                return docs
+            zf.extractall(tmpdir, members=names)
 
-    for fpath in files:
-        with open(fpath, encoding="utf-8") as f:
-            conversations = json.load(f)
-        for conv in conversations:
-            text = parse_claude_conversation(conv)
-            if text:
-                metadata = {
-                    "source": "claude",
+        for fpath in Path(tmpdir).glob("**/conversations.json"):
+            with open(fpath, encoding="utf-8") as f:
+                conversations = json.load(f)
+            for conv in conversations:
+                text = parse_claude_conversation(conv)
+                if not text:
+                    continue
+                conv_id = conv.get("uuid", "")
+                if not conv_id:
+                    continue
+                out_path = conv_dir / f"{conv_id}.md"
+                out_path.write_text(text, encoding="utf-8")
+                docs.append((text, {
+                    "source": str(out_path),
                     "title": conv.get("name", "Untitled"),
-                    "id": conv.get("uuid", ""),
+                    "id": conv_id,
                     "created": conv.get("created_at", ""),
-                }
-                docs.append((text, metadata))
+                }))
+    return docs
 
+
+def load_chatgpt_docs(export_dir: str, conv_dir: Path) -> list[tuple[str, dict]]:
+    """
+    Find ZIP files in export_dir and extract ChatGPT conversations into conv_dir.
+    Returns (text, metadata) tuples ready for indexing.
+    """
+    zips = sorted(Path(export_dir).glob("*.zip"))
+    if not zips:
+        print(f"  No ZIP files found in {export_dir}")
+        return []
+
+    docs = []
+    for zip_path in zips:
+        print(f"  Extracting {zip_path.name}...")
+        docs.extend(extract_chatgpt_zip(zip_path, conv_dir))
+    return docs
+
+
+def load_claude_docs(export_dir: str, conv_dir: Path) -> list[tuple[str, dict]]:
+    """
+    Find ZIP files in export_dir and extract Claude conversations into conv_dir.
+    Returns (text, metadata) tuples ready for indexing.
+    """
+    zips = sorted(Path(export_dir).glob("*.zip"))
+    if not zips:
+        print(f"  No ZIP files found in {export_dir}")
+        return []
+
+    docs = []
+    for zip_path in zips:
+        print(f"  Extracting {zip_path.name}...")
+        docs.extend(extract_claude_zip(zip_path, conv_dir))
     return docs
 
 
@@ -174,8 +246,8 @@ def generate_topic_summary(titles: list[str]) -> str | None:
     Use the `claude` CLI to analyze conversation titles and produce a structured
     topic summary grouped by frequency tier (Dominant / Substantial / Moderate).
 
-    Sends only titles — not full conversation text — so input is ~10-15K tokens.
-    Returns None if `claude` is not on PATH or the call fails.
+    Sends only titles — not full conversation text — so input scales at ~6 tokens
+    per title. Returns None if `claude` is not on PATH or the call fails.
     """
     if not shutil.which("claude"):
         print("  `claude` CLI not found on PATH; skipping summary generation")
@@ -222,19 +294,29 @@ def write_summary(summary: str, index_dir: Path, total: int) -> None:
 def build(args):
     from leann.api import LeannBuilder
 
-    index_path = str(Path(args.index_dir).expanduser() / "conversations.leann")
+    index_dir = Path(args.index_dir).expanduser()
+    index_dir.mkdir(parents=True, exist_ok=True)
+    index_path = str(index_dir / "conversations.leann")
 
     if Path(f"{index_path}.meta.json").exists() and not args.force_rebuild:
         print(f"Index already exists at {index_path}. Use --force-rebuild to rebuild.")
         return
 
-    # Load documents from both sources
+    # Clear per-conversation files on rebuild so stale conversations don't linger
+    for subdir in ["chatgpt", "claude"]:
+        d = index_dir / subdir
+        if d.exists() and args.force_rebuild:
+            shutil.rmtree(d)
+            print(f"Cleared {d}")
+        d.mkdir(parents=True, exist_ok=True)
+
+    # Extract ZIPs and write individual conversation files
     print("Loading ChatGPT conversations...")
-    chatgpt_docs = load_chatgpt_docs("downloads/chatgpt")
+    chatgpt_docs = load_chatgpt_docs("downloads/chatgpt", index_dir / "chatgpt")
     print(f"  {len(chatgpt_docs)} ChatGPT conversations loaded")
 
     print("Loading Claude conversations...")
-    claude_docs = load_claude_docs("downloads/claude")
+    claude_docs = load_claude_docs("downloads/claude", index_dir / "claude")
     print(f"  {len(claude_docs)} Claude conversations loaded")
 
     all_docs = chatgpt_docs + claude_docs
@@ -265,9 +347,6 @@ def build(args):
             print(f"  Added {i + 1}/{len(all_docs)}...")
 
     print("Building index structure (this takes a few minutes)...")
-    index_dir = Path(args.index_dir).expanduser()
-    index_dir.mkdir(parents=True, exist_ok=True)
-    index_path = str(index_dir / "conversations.leann")
     builder.build_index(index_path)
     print(f"Index saved to: {index_path}")
 
@@ -288,9 +367,13 @@ def build(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Build LEANN index over conversation exports")
-    parser.add_argument("--index-dir", default="~/.leann/indexes", help="Directory to write the index (default: ~/.leann/indexes)")
-    parser.add_argument("--max-convos", type=int, default=-1, help="Limit conversations (for testing, -1 = all)")
-    parser.add_argument("--force-rebuild", action="store_true", help="Rebuild even if index exists")
-    parser.add_argument("--skip-summary", action="store_true", help="Skip topic summary generation (no Anthropic API call)")
+    parser.add_argument("--index-dir", default="~/.leann/indexes",
+                        help="Directory to write the index and per-conversation files (default: ~/.leann/indexes)")
+    parser.add_argument("--max-convos", type=int, default=-1,
+                        help="Limit conversations (for testing, -1 = all)")
+    parser.add_argument("--force-rebuild", action="store_true",
+                        help="Clear existing conversation files and rebuild from scratch")
+    parser.add_argument("--skip-summary", action="store_true",
+                        help="Skip topic summary generation (no `claude` CLI call)")
     args = parser.parse_args()
     build(args)

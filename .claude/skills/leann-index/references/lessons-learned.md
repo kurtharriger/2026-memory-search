@@ -12,17 +12,21 @@ readers are mismatched against the current export formats. Rather than patch
 upstream code, we wrote a thin custom script that uses LEANN's core API
 (`LeannBuilder`) directly.
 
-### ChatGPT reader: HTML only, exports are JSON
+### ChatGPT reader: HTML only, exports are JSON ZIPs
 
 LEANN's `ChatGPTReader` parses `chat.html` from the old export format.
-The current ChatGPT export (as of 2025) is a directory of JSON files:
+The current ChatGPT export (as of 2025) is a ZIP file containing JSON files:
 
 ```
-downloads/chatgpt/conversations/
-  conversations-000.json   # list of 100 conversations each
-  conversations-001.json
-  ...
+chatgpt-<hash>-<date>.zip
+  └── conversations/
+        conversations-000.json   # list of ~100 conversations each
+        conversations-001.json
+        ...
 ```
+
+`build_index.py` accepts the ZIP directly (placed in `downloads/chatgpt/`),
+extracts only the `conversations-*.json` files to a temp dir, and processes them.
 
 Each conversation uses a **mapping tree** — a dict of nodes where each node
 has `{id, message, parent}`. This represents the branching history when users
@@ -36,25 +40,42 @@ Each node's message content lives at `message["content"]["parts"]` (a list of
 strings — join them). Role is at `message["author"]["role"]` (`"user"` or
 `"assistant"`; skip `"system"` and `"tool"` nodes).
 
-### Claude reader: wrong key names
+### Claude reader: wrong key names, ZIP input
 
 LEANN's `ClaudeReader` looks for a `messages` key on each conversation, but
 the actual Claude export uses `chat_messages`. It also looks for `role` and
 `content` on each message, but the actual fields are `sender` (`"human"` or
 `"assistant"`) and `text`. The reader silently produces zero documents.
 
-The Claude export unpacks to a nested structure:
+The Claude export is a ZIP containing a nested batch folder:
 ```
-downloads/claude/
-  data-<uuid>-batch-0000/
-    conversations.json   # list of 23 conversations
-    memories.json
-    projects/
-    users.json
+claude-<hash>-<date>.zip
+  └── data-<uuid>-batch-0000/
+        conversations.json   # list of conversations
+        memories.json
+        projects/
+        users.json
 ```
 
-`build_index.py` finds `conversations.json` with `glob("**/conversations.json",
-recursive=True)` so the nested batch folder doesn't need to be renamed.
+`build_index.py` accepts the ZIP directly (placed in `downloads/claude/`),
+extracts only files named `conversations.json` to a temp dir, and processes them.
+
+---
+
+## Per-conversation file storage
+
+`build_index.py` writes each conversation as an individual `.md` file:
+```
+~/.leann/indexes/chatgpt/<conversation-id>.md
+~/.leann/indexes/claude/<conversation-uuid>.md
+```
+
+The `source` field in search result metadata is the absolute path to this file.
+Claude can `Read` the file for full conversation text without re-processing the
+ZIP or authenticating with any web app.
+
+`--force-rebuild` clears these subdirectories before re-extracting so stale
+conversations from an old export don't linger alongside new ones.
 
 ---
 
@@ -209,10 +230,16 @@ of N messages with `create_text_chunks()` from LEANN's `apps/chunking` module.
 
 ---
 
-## ChatGPT zip file in downloads/
+## ChatGPT and Claude ZIP placement
 
-There's a leftover zip file in `downloads/` from the original export:
-`chatgpt-<hash>-2026-05-15-03-02-07-<id>.zip`
+Drop export ZIPs directly into the source directories — no extraction needed:
+```
+downloads/chatgpt/chatgpt-<hash>-<date>.zip
+downloads/claude/claude-<hash>-<date>.zip
+```
 
-The extracted `conversations/` folder is what `build_index.py` reads.
-The zip can be deleted or kept as a backup.
+`build_index.py` scans each directory for `*.zip`, extracts only the
+conversation JSON files to a temp dir, and processes from there. Multiple ZIPs
+can coexist in the same directory (e.g. multiple exports over time), but note
+that `--force-rebuild` clears `~/.leann/indexes/chatgpt/` and `~/.leann/indexes/claude/`
+before re-processing all ZIPs, so you'll always get a clean merged result.
