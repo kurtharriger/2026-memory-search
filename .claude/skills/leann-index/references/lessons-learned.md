@@ -15,11 +15,10 @@ upstream code, we wrote a thin custom script that uses LEANN's core API
 ### ChatGPT reader: HTML only, exports are JSON ZIPs
 
 LEANN's `ChatGPTReader` parses `chat.html` from the old export format.
-The current ChatGPT export (as of 2025) is a ZIP file containing JSON files.
-The downloaded filename does not include a "chatgpt-" prefix — it's a bare hash:
+The current ChatGPT export (as of 2025) is a ZIP file containing JSON files:
 
 ```
-<hash>-<date>-<id>.zip
+<any>.zip
   └── conversations/
         conversations-000.json   # list of ~100 conversations each
         conversations-001.json
@@ -277,10 +276,10 @@ of N messages with `create_text_chunks()` from LEANN's `apps/chunking` module.
 
 ## ChatGPT and Claude ZIP placement
 
-Drop export ZIPs directly into the source directories — no extraction needed.
-The filenames are whatever the service downloads them as (no renaming required):
+Drop export ZIPs directly into the source directories — no extraction needed,
+and no renaming required:
 ```
-downloads/chatgpt/<hash>-<date>-<id>.zip        # ChatGPT: bare hash, no prefix
+downloads/chatgpt/<any>.zip
 downloads/claude/data-<uuid>-<timestamp>-<hash>-batch-NNNN.zip   # Claude: data- prefix
 ```
 

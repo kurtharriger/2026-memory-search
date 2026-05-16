@@ -2,7 +2,13 @@
 
 Semantic search over personal AI conversation history using [LEANN](https://github.com/yichuan-w/LEANN) — a graph-based vector index with a 97% storage reduction vs traditional vector databases.
 
-**Index location:** `~/.leann/indexes/conversations.leann`
+Three separate indexes, one per source:
+
+| Index | Search command | Contents |
+|---|---|---|
+| `chatgpt` | `leann search chatgpt` | ChatGPT conversation exports |
+| `claude` | `leann search claude` | Claude.ai conversation exports |
+| `claude-code` | `leann search claude-code` | Claude Code coding sessions |
 
 ---
 
@@ -14,14 +20,16 @@ Once the MCP server is registered (see [Setup from scratch](#setup-from-scratch)
 
 > "Search my conversation history for anything about Kubernetes networking"
 > "What have I discussed about salary negotiation?"
-> "Find conversations where I was debugging React hooks"
+> "Search my Claude Code sessions for anything about Keycloak"
 
-Claude will call `leann_search` with `index_name: "conversations"` automatically.
+Claude will call `leann_search` with the appropriate index name automatically.
 
 ### From the terminal
 
 ```bash
-uv run leann search conversations "your query here" --top-k 5 --non-interactive
+uv run leann search chatgpt "your query" --top-k 5 --non-interactive
+uv run leann search claude "your query" --top-k 5 --non-interactive
+uv run leann search claude-code "your query" --top-k 5 --non-interactive
 ```
 
 ---
@@ -32,9 +40,9 @@ Re-export your data and rebuild whenever you want fresh results (suggested: mont
 
 ### 1. Export your data
 
-**ChatGPT:** Settings → Data Controls → Export → download the ZIP → drop it into `downloads/chatgpt/` (no extraction needed). The filename is a bare hash — no prefix:
+**ChatGPT:** Settings → Data Controls → Export → download the ZIP → drop it into `downloads/chatgpt/` (no extraction needed):
 ```
-downloads/chatgpt/<hash>-<date>-<id>.zip
+downloads/chatgpt/<any>.zip
 ```
 
 **Claude.ai:** Settings → Privacy → Export Data → download the ZIP → drop it into `downloads/claude/`. The filename is prefixed with `data-`:
@@ -42,17 +50,24 @@ downloads/chatgpt/<hash>-<date>-<id>.zip
 downloads/claude/data-<uuid>-<timestamp>-<hash>-batch-NNNN.zip
 ```
 
+**Claude Code** sessions are indexed automatically from `~/.claude/projects/` — no export needed.
+
 ### 2. Rebuild
 
+Rebuild all sources:
 ```bash
 uv run python build_index.py --force-rebuild
 ```
 
-Takes about 20–30 seconds for ~2,000 conversations. The MCP server picks up the new index immediately — no restart needed.
+Rebuild only one source (e.g. after a new ChatGPT export, skip the others):
+```bash
+uv run python build_index.py --sources chatgpt --force-rebuild
+```
 
-After indexing, the script calls `claude -p` to generate a topic summary
-(`~/.leann/indexes/conversations.summary.md`). This requires Claude Code to be
-installed and authenticated. If it isn't, or you want to skip it:
+After indexing, the script calls `claude -p` to generate topic summaries
+(`~/.leann/indexes/<source>/<source>.summary.md` and a combined
+`~/.leann/indexes/summary.md`). This requires Claude Code to be installed and
+authenticated. To skip:
 
 ```bash
 uv run python build_index.py --force-rebuild --skip-summary
@@ -61,7 +76,8 @@ uv run python build_index.py --force-rebuild --skip-summary
 ### 3. Verify
 
 ```bash
-uv run leann search conversations "test query" --top-k 2 --non-interactive
+uv run leann search chatgpt "test query" --top-k 2 --non-interactive
+uv run leann search claude-code "test query" --top-k 2 --non-interactive
 ```
 
 ---
@@ -70,8 +86,8 @@ uv run leann search conversations "test query" --top-k 2 --non-interactive
 
 ```
 .
-├── install.sh              # One-command setup (venv, MCP, user skill, index)
-├── build_index.py          # Extracts ZIPs, writes per-conversation files, builds index
+├── install.sh              # One-command setup (venv, MCP, user skill, indexes)
+├── build_index.py          # Extracts ZIPs, writes per-conversation files, builds indexes
 ├── downloads/
 │   ├── chatgpt/            # Drop ChatGPT export ZIP here (no extraction needed)
 │   └── claude/             # Drop Claude.ai export ZIP here
@@ -80,13 +96,22 @@ uv run leann search conversations "test query" --top-k 2 --non-interactive
         └── leann-index/    # Project skill for AI agents (see below)
 
 ~/.leann/indexes/           # All index output lives here (outside the repo)
-    conversations.leann     # Vector index
-    conversations.summary.md
-    chatgpt/<id>.md         # One file per ChatGPT conversation
-    claude/<id>.md          # One file per Claude conversation
+    summary.md              # Combined topic summary (@-imported by user skill)
+    chatgpt/
+        chatgpt.leann       # Vector index (leann search chatgpt)
+        chatgpt.summary.md
+        sources/<id>.md     # One file per conversation
+    claude/
+        claude.leann        # Vector index (leann search claude)
+        claude.summary.md
+        sources/<id>.md
+    claude-code/
+        claude-code.leann   # Vector index (leann search claude-code)
+        claude-code.summary.md
+        sources/<id>.md     # One file per Claude Code session
 ~/.claude/skills/
     └── personal-search/    # User-level skill (created by install.sh)
-                            # @-imports the topic summary — stays current on rebuild
+                            # @-imports summary.md — stays current on rebuild
 ```
 
 ---
@@ -103,7 +128,7 @@ This installs Homebrew dependencies, creates the Python 3.13 venv, installs
 LEANN, registers the MCP server with Claude Code, and writes a user-level skill
 (`~/.claude/skills/personal-search/`) so `leann_search` is available in all
 Claude Code sessions. If export data is already in `downloads/`, it also builds
-the index.
+the indexes.
 
 If no export data is found in `downloads/`, the index build is skipped
 automatically and the script prints next steps. Safe to run before exporting.
@@ -125,7 +150,7 @@ uv pip install leann
 # Required for leann_search to be available in Claude Code sessions.
 claude mcp add leann-server -- "$(pwd)/.venv/bin/leann_mcp"
 
-# 4. Build the index (writes to ~/.leann/indexes/ and registers it automatically)
+# 4. Build the indexes (writes to ~/.leann/indexes/ and registers automatically)
 uv run python build_index.py
 ```
 
