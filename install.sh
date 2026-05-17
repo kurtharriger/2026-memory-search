@@ -21,7 +21,6 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-VENV_DIR="$SCRIPT_DIR/.venv"
 SKILL_DIR="$HOME/.claude/skills/personal-search"
 SUMMARY_FILE="$HOME/.leann/indexes/summary.md"
 INDEX_FILE="$HOME/.leann/indexes/chatgpt/chatgpt.leann.meta.json"
@@ -50,27 +49,15 @@ else
     echo "  All present."
 fi
 
-# ── 2. Python 3.13 venv ───────────────────────────────────────────────────────
+# ── 2. Install dependencies ───────────────────────────────────────────────────
+# uv sync reads pyproject.toml, creates .venv with Python 3.13, and installs
+# all declared dependencies (leann + llama-index-core).
 echo ""
-echo "→ Python 3.13 venv..."
-if [ ! -d "$VENV_DIR" ]; then
-    uv venv --python 3.13 "$VENV_DIR"
-    echo "  Created: $VENV_DIR"
-else
-    echo "  Exists: $VENV_DIR"
-fi
-
-# ── 3. Install LEANN in project venv (for build_index.py) ────────────────────
-echo ""
-echo "→ Installing LEANN in project venv (for build_index.py)..."
-if "$VENV_DIR/bin/python" -c "import leann" 2>/dev/null; then
-    echo "  Already installed."
-else
-    # libomp is keg-only on Apple Silicon; set linker flags for the build step
-    export LDFLAGS="-L/opt/homebrew/opt/libomp/lib"
-    export CPPFLAGS="-I/opt/homebrew/opt/libomp/include"
-    (cd "$SCRIPT_DIR" && uv pip install leann)
-fi
+echo "→ Installing dependencies (uv sync)..."
+# libomp is keg-only on Apple Silicon; set linker flags for native builds
+export LDFLAGS="-L/opt/homebrew/opt/libomp/lib"
+export CPPFLAGS="-I/opt/homebrew/opt/libomp/include"
+(cd "$SCRIPT_DIR" && uv sync)
 
 # ── 4. Register MCP server ────────────────────────────────────────────────────
 # leann_mcp shells out to `leann` CLI. Registering via `uv run --project`
