@@ -10,7 +10,7 @@
 #   5. Builds the index if export data is present in downloads/; skips with
 #      instructions if not (safe to run before exporting conversations)
 #
-# The user skill uses an @-import to reference ~/.leann/indexes/conversations.summary.md,
+# The user skill uses an @-import to reference ~/.leann/indexes/summary.md,
 # so it reflects the current index content automatically whenever the index is rebuilt.
 #
 # Usage:
@@ -60,9 +60,9 @@ else
     echo "  Exists: $VENV_DIR"
 fi
 
-# ── 3. Install LEANN ──────────────────────────────────────────────────────────
+# ── 3. Install LEANN in project venv (for build_index.py) ────────────────────
 echo ""
-echo "→ Installing LEANN..."
+echo "→ Installing LEANN in project venv (for build_index.py)..."
 if "$VENV_DIR/bin/python" -c "import leann" 2>/dev/null; then
     echo "  Already installed."
 else
@@ -73,17 +73,15 @@ else
 fi
 
 # ── 4. Register MCP server ────────────────────────────────────────────────────
+# leann_mcp shells out to `leann` CLI. Registering via `uv run --project`
+# ensures the project venv is active on each spawn so both binaries are on PATH,
+# without requiring a separate tool install.
 echo ""
 echo "→ Registering leann MCP server with Claude Code..."
-MCP_BINARY="$VENV_DIR/bin/leann_mcp"
-if [ ! -f "$MCP_BINARY" ]; then
-    echo "  ERROR: $MCP_BINARY not found — did LEANN install successfully?"
-    exit 1
-fi
 # Remove existing registration then re-add (idempotent)
 claude mcp remove leann-server 2>/dev/null || true
-claude mcp add leann-server -- "$MCP_BINARY"
-echo "  Registered: $MCP_BINARY"
+claude mcp add -s user leann-server -- uv run --project "$SCRIPT_DIR" leann_mcp
+echo "  Registered: uv run --project $SCRIPT_DIR leann_mcp"
 
 # ── 5. User-level skill ───────────────────────────────────────────────────────
 # Writes ~/.claude/skills/personal-search/SKILL.md so leann_search is available
