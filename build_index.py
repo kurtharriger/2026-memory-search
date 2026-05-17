@@ -41,6 +41,9 @@ import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+from llama_index.core.node_parser import SentenceSplitter
+from llama_index.core.schema import Document as LlamaDocument
+
 
 VALID_SOURCES = ("chatgpt", "claude", "claude-code")
 
@@ -82,6 +85,25 @@ def yaml_str(s: str) -> str:
     json.dumps produces double-quoted strings that are valid YAML scalar values.
     """
     return json.dumps(str(s))
+
+
+_splitter = SentenceSplitter(chunk_size=512, chunk_overlap=128, separator=" ", paragraph_separator="\n\n")
+
+
+def chunk_doc(text: str, metadata: dict) -> list[tuple[str, dict]]:
+    """Split a document into overlapping sentence chunks, carrying metadata to each.
+
+    chunk_size=512 tokens (~2000 chars) keeps each search result to a single
+    focused passage rather than returning an entire conversation verbatim.
+    Each chunk gets a unique id derived from the base id so add_text passage
+    ids don't collide.
+    """
+    nodes = _splitter.get_nodes_from_documents([LlamaDocument(text=text)])
+    base_id = metadata.get("id", "")
+    return [
+        (node.get_content(), {**metadata, "id": f"{base_id}_{i}" if base_id else str(i), "chunk_index": i})
+        for i, node in enumerate(nodes)
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -278,11 +300,12 @@ def extract_chatgpt_zip(zip_path: Path, sources_dir: Path) -> list[tuple[str, di
 
                 out_path = sources_dir / f"{conv_id}.md"
                 out_path.write_text(text, encoding="utf-8")
-                docs.append((text, {
+                docs.extend(chunk_doc(text, {
                     "source": str(out_path),
                     "title": conv.get("title", "Untitled"),
                     "id": conv_id,
                     "created": conv.get("create_time", 0),
+                    "source_file_size": len(text.encode()),
                 }))
     return docs
 
@@ -332,11 +355,12 @@ def extract_claude_zip(zip_path: Path, sources_dir: Path) -> list[tuple[str, dic
 
                 out_path = sources_dir / f"{conv_id}.md"
                 out_path.write_text(text, encoding="utf-8")
-                docs.append((text, {
+                docs.extend(chunk_doc(text, {
                     "source": str(out_path),
                     "title": conv.get("name", "Untitled"),
                     "id": conv_id,
                     "created": conv.get("created_at", ""),
+                    "source_file_size": len(text.encode()),
                 }))
     return docs
 
@@ -415,12 +439,13 @@ def load_claude_code_docs(projects_dir: str, sources_dir: Path) -> list[tuple[st
 
         out_path = sources_dir / f"{session_id}.md"
         out_path.write_text(text, encoding="utf-8")
-        docs.append((text, {
+        docs.extend(chunk_doc(text, {
             "source": str(out_path),
             "title": meta["title"],
             "id": session_id,
             "project": meta.get("cwd", ""),
             "created": meta.get("created", ""),
+            "source_file_size": len(text.encode()),
         }))
     return docs
 

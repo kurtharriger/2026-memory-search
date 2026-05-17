@@ -261,16 +261,48 @@ uv run python build_index.py --force-rebuild --skip-summary
 
 ---
 
-## One document per conversation (no chunking)
+## Chunking: use chunk_doc(), not bare add_text()
 
-`build_index.py` indexes each conversation as a single document. This means:
-- Very long conversations may exceed the model's max token window (384 tokens
-  for MiniLM) and get truncated on embedding
-- Search returns whole conversations, not individual messages
+`LeannBuilder.add_text(text, metadata)` stores text verbatim — it does **no
+chunking**. A 114 KB conversation indexed as one unit embeds as a single vector
+and is returned in full on every match, consuming enormous context budget.
 
-For most personal history searches this is fine. If retrieval quality suffers
-on long technical conversations, consider splitting conversations into chunks
-of N messages with `create_text_chunks()` from LEANN's `apps/chunking` module.
+`build_index.py` uses a `chunk_doc()` helper (wrapping llama-index's
+`SentenceSplitter`) that splits each conversation into 512-token overlapping
+chunks before calling `add_text`. Each chunk gets its own vector and is returned
+independently, so search results are 1–3 KB instead of 60–115 KB.
+
+```python
+_splitter = SentenceSplitter(chunk_size=512, chunk_overlap=128, ...)
+
+def chunk_doc(text, metadata):
+    nodes = _splitter.get_nodes_from_documents([LlamaDocument(text=text)])
+    base_id = metadata.get("id", "")
+    return [
+        (node.get_content(), {**metadata, "id": f"{base_id}_{i}", "chunk_index": i})
+        for i, node in enumerate(nodes)
+    ]
+```
+
+Each chunk carries `source_file_size` (bytes of the full source `.md` file) so
+the caller can check document size without hitting the filesystem. Chunk ids are
+`{conv_id}_{i}` to avoid collisions in the passage store.
+
+LEANN ships `apps/chatgpt_rag.py` as a reference — it calls `create_text_chunks()`
+before indexing, confirming this is the intended pattern.
+
+### Don't read source files without checking size first
+
+Search result metadata includes `source` (path to the full conversation `.md`)
+and `source_file_size`. Always check size before reading:
+
+```bash
+wc -c <path>   # bytes
+```
+
+Conversation files can be 50K+ tokens for long Claude Code sessions. Only read
+if the user explicitly needs the full text and the file is small (< ~20 KB).
+Summarize from the search excerpt otherwise.
 
 ---
 

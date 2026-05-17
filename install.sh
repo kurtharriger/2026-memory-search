@@ -125,9 +125,18 @@ Call \`leann_search\` with:
 - \`query\`: a natural-language description of what to find
 
 If the user doesn't specify a source, search all three in parallel and combine
-results. Results include the conversation title, a text excerpt, and a \`source\`
-field in the metadata — the absolute path to the individual conversation file.
-Read that file when the user needs the full conversation text.
+results. Always pass \`show_metadata: true\` so results include \`source\` (absolute
+path to the conversation file), \`source_file_size\` (bytes of the full source
+document), and \`chunk_index\`.
+
+**Before reading any source file**, check \`source_file_size\` from the metadata.
+Conversation files can be very large (50K+ tokens for long Claude Code sessions).
+Only read a source file if the user explicitly asks for the full text AND
+\`source_file_size\` is small (under ~20 000 bytes). For larger files, summarize
+from the search excerpt or ask the user to confirm before loading.
+
+If \`source_file_size\` is missing (index built before this field was added),
+check size with \`stat -f%z <path>\` before reading.
 
 ## What's in the indexes
 
